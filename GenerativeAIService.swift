@@ -3,36 +3,36 @@
 import Foundation
 import FoundationModels
 
-@Generable
-struct ModelResponse: Decodable, Sendable {
-    let reply: String
-}
-
 @MainActor
 class GenerativeAIService {
 
-    private func createSession(with memories: String) -> LanguageModelSession {
-        let instructions = Instructions {
-            "You are a helpful assistant named Lucy. Your answers should be helpful and concise."
-            "Remember these immutable facts:"
-            " - \(memories)"
-            "Provide your final response in the 'reply' field."
-        }
-        return LanguageModelSession(instructions: instructions)
-    }
-
-    func generateResponse(prompt: String, history: [Message], memories: String) -> LanguageModelSession.ResponseStream<ModelResponse> {
+    // This is a stateless function that uses the most basic, non-streaming API.
+    func generateResponse(prompt: String, history: [Message], memories: String) async throws -> String {
         
-        let session = createSession(with: memories)
+        // ** THE FIX **
+        // Create a "vanilla" session with no instructions to avoid the sandbox error.
+        let session = LanguageModelSession()
         
-        let fullPrompt = history.map { "\($0.role): \($0.content)" }.joined(separator: "\n") + "\nuser: \(prompt)"
+        // 1. Build the ENTIRE context into a single string.
+        let fullPrompt = """
+        You are a helpful assistant named Lucy.
+        Remember these immutable facts:
+        - \(memories)
         
-        let stream = session.streamResponse(
-            generating: ModelResponse.self
-        ) {
-            fullPrompt
-        }
+        ---
+        Conversation History:
+        \(history.map { "\($0.role): \($0.content)" }.joined(separator: "\n"))
+        ---
         
-        return stream
+        New Request:
+        user: \(prompt)
+        assistant:
+        """
+        
+        // 2. Call the session with the complete prompt.
+        let response = try await session.respond(to: fullPrompt)
+        
+        // 3. Return the response content directly.
+        return response.content
     }
 }

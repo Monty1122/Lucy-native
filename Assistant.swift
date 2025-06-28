@@ -3,7 +3,7 @@
 import Foundation
 import SwiftUI
 import Combine
-import CoreAudio // Required for device discovery
+import CoreAudio
 import FoundationModels
 
 @MainActor
@@ -15,27 +15,30 @@ class Assistant: ObservableObject {
     
     @Published var availableInputs: [AudioDevice] = []
     @Published var selectedInputID: AudioDeviceID?
+    
+    @Published var isSpeaking: Bool = false
 
     private let speechService = SpeechService()
     private let speechRecognitionService = SpeechRecognitionService()
     private let generativeAIService = GenerativeAIService()
     private let memoryService = MemoryService()
+    
+    private var speechServiceCancellable: AnyCancellable?
     private var transcriptionTask: Task<Void, Never>?
 
     init() {
         speechRecognitionService.requestPermission()
         discoverAudioDevices()
         Task { await memoryService.setup() }
+        
+        speechServiceCancellable = speechService.$isSpeaking.sink { [weak self] speaking in
+            self?.isSpeaking = speaking
+        }
     }
     
     func discoverAudioDevices() {
         var devices: [AudioDevice] = []
-
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var propertySize: UInt32 = 0
 
         guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &propertySize) == noErr else { return }
@@ -68,20 +71,25 @@ class Assistant: ObservableObject {
     }
 
     func startListening() {
-        guard let deviceID = selectedInputID else {
-            self.status = "Error: No microphone selected."
-            return
-        }
-        
         Task {
-            if await speechService.isSpeaking() {
-                await speechService.stop()
-                status = "Idle"
+            // ** THE FIX **
+            // This guard prevents the function from running again if it's already in a listening or speaking state.
+            guard !isListening else { return }
+
+            if isSpeaking {
+                speechService.stop()
                 return
             }
+            
+            guard let deviceID = selectedInputID else {
+                self.status = "Error: No microphone selected."
+                return
+            }
+            
             isListening = true
             status = "Listening..."
             displayedText = ""
+            
             transcriptionTask = Task {
                 do {
                     for try await transcription in speechRecognitionService.startTranscribing(deviceID: deviceID) {
@@ -95,7 +103,6 @@ class Assistant: ObservableObject {
         }
     }
     
-    // stopListeningAndProcess function remains the same...
     func stopListeningAndProcess() {
         isListening = false
         status = "Thinking..."
@@ -116,14 +123,9 @@ class Assistant: ObservableObject {
             
             do {
                 let memories = await memoryService.getMemoriesAsString()
-                let responseStream = generativeAIService.generateResponse(prompt: userPrompt, history: conversation, memories: memories)
-                var fullResponseText = ""
-                for try await partialResponse in responseStream {
-                    let currentText = partialResponse.reply ?? ""
-                    self.displayedText = currentText
-                    fullResponseText = currentText
-                }
-                await self.speechService.speak(text: fullResponseText)
+                let fullResponseText = try await generativeAIService.generateResponse(prompt: userPrompt, history: conversation, memories: memories)
+                self.displayedText = fullResponseText
+                speechService.speak(text: fullResponseText)
                 conversation.append(.init(role: "assistant", content: fullResponseText))
                 status = "Idle"
             } catch {

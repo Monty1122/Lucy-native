@@ -1,17 +1,16 @@
 import SwiftUI
-import CoreAudio // Import CoreAudio to use the AudioDeviceID type in the Picker tag
+import CoreAudio
 
 struct ContentView: View {
     @StateObject private var assistant = Assistant()
+    
+    // This state variable is essential for tracking the key press state.
+    @State private var isSpaceBarPressed = false
 
     var body: some View {
         VStack {
-            // ** THE UI FIX **
-            // This Picker will display the list of available microphones.
             Picker("Microphone:", selection: $assistant.selectedInputID) {
-                // We loop over the availableInputs array from the Assistant.
                 ForEach(assistant.availableInputs, id: \.self) { device in
-                    // Use .tag to associate each Text view with its device ID.
                     Text(device.name).tag(device.id as AudioDeviceID?)
                 }
             }
@@ -20,6 +19,7 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(assistant.displayedText)
+                        .font(.title)
                         .padding()
                         .id(1)
                 }
@@ -30,12 +30,19 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Circle()
-                .fill(assistant.isListening ? .red : .blue)
-                .frame(width: 80, height: 80)
+                .fill(assistant.isListening ? .red : (assistant.isSpeaking ? .orange : .blue))
+                .frame(width: 100, height: 100)
+                .overlay(
+                    Text(buttonLabel)
+                        .foregroundColor(.white)
+                        .font(.headline)
+                )
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { _ in
-                            if !assistant.isListening {
+                            if assistant.isSpeaking {
+                                assistant.startListening()
+                            } else if !assistant.isListening {
                                 assistant.startListening()
                             }
                         }
@@ -48,9 +55,48 @@ struct ContentView: View {
                 .padding()
             
             Text(assistant.status)
-                .font(.caption)
+                .font(.body)
                 .padding(.bottom)
         }
-        .frame(minWidth: 400, minHeight: 400) // Made slightly taller for the picker
+        .frame(minWidth: 450, minHeight: 450)
+        // ** THE DEFINITIVE FIX **
+        // This modifier is called once when the view appears.
+        // It sets up a robust, app-wide keyboard listener.
+        .onAppear {
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                // Check if the space bar is pressed.
+                if event.keyCode == 49 { // 49 is the key code for the space bar
+                    if !isSpaceBarPressed {
+                        assistant.startListening()
+                        isSpaceBarPressed = true
+                    }
+                    // By returning nil, we "swallow" the event and prevent the beep.
+                    return nil
+                }
+                // For any other key, we pass the event on.
+                return event
+            }
+            
+            NSEvent.addLocalMonitorForEvents(matching: .keyUp) { event in
+                if event.keyCode == 49 {
+                    if assistant.isListening {
+                        assistant.stopListeningAndProcess()
+                    }
+                    isSpaceBarPressed = false
+                    return nil
+                }
+                return event
+            }
+        }
+    }
+    
+    private var buttonLabel: String {
+        if assistant.isSpeaking {
+            return "Stop"
+        } else if assistant.isListening {
+            return "Listening..."
+        } else {
+            return "Press & Hold"
+        }
     }
 }

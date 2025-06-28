@@ -72,8 +72,6 @@ class Assistant: ObservableObject {
 
     func startListening() {
         Task {
-            // ** THE FIX **
-            // This guard prevents the function from running again if it's already in a listening or speaking state.
             guard !isListening else { return }
 
             if isSpeaking {
@@ -104,6 +102,9 @@ class Assistant: ObservableObject {
     }
     
     func stopListeningAndProcess() {
+        // This check ensures we don't process an empty transcription if the user just taps the button.
+        guard isListening else { return }
+        
         isListening = false
         status = "Thinking..."
         speechRecognitionService.stopTranscribing()
@@ -124,8 +125,14 @@ class Assistant: ObservableObject {
             do {
                 let memories = await memoryService.getMemoriesAsString()
                 let fullResponseText = try await generativeAIService.generateResponse(prompt: userPrompt, history: conversation, memories: memories)
+                
                 self.displayedText = fullResponseText
-                speechService.speak(text: fullResponseText)
+                
+                // ** THE FIX **
+                // Clean the text before speaking it.
+                let cleanedText = cleanTextForSpeech(fullResponseText)
+                speechService.speak(text: cleanedText)
+                
                 conversation.append(.init(role: "assistant", content: fullResponseText))
                 status = "Idle"
             } catch {
@@ -133,5 +140,13 @@ class Assistant: ObservableObject {
                 status = "Error"
             }
         }
+    }
+    
+    /// A helper function to remove unwanted characters before speech.
+    private func cleanTextForSpeech(_ text: String) -> String {
+        // This regular expression will keep letters, numbers, spaces, and basic punctuation.
+        // It will remove everything else.
+        let pattern = "[^a-zA-Z0-9 .,?!']"
+        return text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
     }
 }
